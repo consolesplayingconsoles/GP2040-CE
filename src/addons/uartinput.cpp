@@ -1,5 +1,6 @@
 #include "addons/uartinput.h"
 #include "storagemanager.h"
+#include "eventmanager.h"
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
 #include "pico/bootrom.h"
@@ -14,6 +15,8 @@
 //   btnH  = buttons  8..15 (S1 S2 L3 R3 A1 A2 A3 A4)
 // Control frame: dpad == 0xFF -> btnL is a command:
 //   0x01 = reboot to BOOTSEL (remote reflash, no physical button)
+//   0x02 = ps3 mode, 0x03 = mouse mode (kept for older hubs)
+//   0x04 = set the input mode to the value in btnH (stored on the board; a different mode reboots into it)
 // Onboard LED (GP25) flashes LED_FLASH_MS on every byte received over UART:
 // an activity light AND a live forward-link probe. Data arriving -> it pulses;
 // a dead/loose RX wire -> it stays dark (RX is pulled high so noise can't fake
@@ -27,6 +30,34 @@
 #define LED_PIN      25      // PICO_DEFAULT_LED_PIN (onboard LED)
 #define LED_FLASH_MS 90
 #define IDLE_BLIP_MS 3000   // idle "still alive" blip period (ms)
+
+// The input mode this boot runs (set in gp2040.cpp).
+extern InputMode cpcRunningMode;
+
+bool cpcModeAllowed(InputMode mode) {
+    switch (mode) {
+        case INPUT_MODE_XINPUT: case INPUT_MODE_SWITCH: case INPUT_MODE_PS3: case INPUT_MODE_KEYBOARD:
+        case INPUT_MODE_PS4: case INPUT_MODE_XBONE: case INPUT_MODE_MDMINI: case INPUT_MODE_NEOGEO:
+        case INPUT_MODE_PCEMINI: case INPUT_MODE_EGRET: case INPUT_MODE_ASTRO: case INPUT_MODE_PSCLASSIC:
+        case INPUT_MODE_XBOXORIGINAL: case INPUT_MODE_PS5: case INPUT_MODE_GENERIC: case INPUT_MODE_SWITCH_PRO:
+        case INPUT_MODE_P5GENERAL: case INPUT_MODE_MOUSE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Control frames 0x02 / 0x03 / 0x04: make a mode the stored input mode (stored as CPC_MODE_BASE + mode).
+// A mode other than the running one is saved and the board reboots into it (the host sees it
+// re-enumerate). The running mode only makes sure it is the stored one, without a reboot.
+static void cpcSetMode(InputMode mode) {
+    if (!cpcModeAllowed(mode)) return;
+    GamepadOptions& options = Storage::getInstance().getGamepadOptions();
+    InputMode stored = (InputMode)(CPC_MODE_BASE + (int)mode);
+    if (options.inputMode == stored && cpcRunningMode == mode) return;
+    options.inputMode = stored;
+    EventManager::getInstance().triggerEvent(new GPStorageSaveEvent(true, cpcRunningMode != mode));
+}
 
 bool UartInput::available() {
     return true;  // always on for now (no proto/web-config dependency)
@@ -46,6 +77,20 @@ void UartInput::setup() {
     uart_puts(UART_ID, "CPC-UARTINPUT-READY\n");
 }
 
+void UartInput::postprocess(bool sent) {
+    // Rumble output: read haptic strength from gamepad state, relay to Pi on change.
+    // Frame: 0xAA 0x55 0xFE <left> <right> <xor>  (0xFE = rumble marker)
+    Gamepad *gamepad = Storage::getInstance().GetGamepad();
+    uint8_t L = (uint8_t)(gamepad->auxState.haptics.leftActuator.intensity  >> 8);
+    uint8_t R = (uint8_t)(gamepad->auxState.haptics.rightActuator.intensity >> 8);
+    if (L != lastRumbleL || R != lastRumbleR) {
+        lastRumbleL = L;
+        lastRumbleR = R;
+        uint8_t frame[6] = {0xAA, 0x55, 0xFE, L, R, (uint8_t)(0xFE ^ L ^ R)};
+        uart_write_blocking(UART_ID, frame, sizeof(frame));
+    }
+}
+
 void UartInput::preprocess() {
     static uint32_t lastRxMs = 0;
 
@@ -58,13 +103,22 @@ void UartInput::preprocess() {
             case 2: f_dpad = b; rxState = 3; break;
             case 3: f_btnL = b; rxState = 4; break;
             case 4: f_btnH = b; rxState = 5; break;
-            case 5: {
-                if (b == (uint8_t)(f_dpad ^ f_btnL ^ f_btnH)) {
+            case 5: f_lx   = b; rxState = 6; break;
+            case 6: f_ly   = b; rxState = 7; break;
+            case 7: f_rx   = b; rxState = 8; break;
+            case 8: f_ry   = b; rxState = 9; break;
+            case 9: {
+                if (b == (uint8_t)(f_dpad ^ f_btnL ^ f_btnH ^ f_lx ^ f_ly ^ f_rx ^ f_ry)) {
                     if (f_dpad == 0xFF) {
                         if (f_btnL == 0x01) reset_usb_boot(0, 0);  // -> BOOTSEL
+                        else if (f_btnL == 0x02) cpcSetMode(InputMode::INPUT_MODE_PS3);
+                        else if (f_btnL == 0x03) cpcSetMode(InputMode::INPUT_MODE_MOUSE);
+                        else if (f_btnL == 0x04) cpcSetMode((InputMode)f_btnH);
                     } else {
                         heldDpad    = f_dpad & 0x0F;
                         heldButtons = (uint16_t)f_btnL | ((uint16_t)f_btnH << 8);
+                        heldLx = f_lx; heldLy = f_ly;
+                        heldRx = f_rx; heldRy = f_ry;
                     }
                 }
                 rxState = 0;
@@ -89,4 +143,8 @@ void UartInput::preprocess() {
     if (heldDpad & 0x04) gamepad->state.dpadOriginal |= GAMEPAD_MASK_LEFT;
     if (heldDpad & 0x08) gamepad->state.dpadOriginal |= GAMEPAD_MASK_RIGHT;
     gamepad->state.buttons |= heldButtons;
+    gamepad->state.lx = (uint16_t)heldLx << 8;
+    gamepad->state.ly = (uint16_t)heldLy << 8;
+    gamepad->state.rx = (uint16_t)heldRx << 8;
+    gamepad->state.ry = (uint16_t)heldRy << 8;
 }

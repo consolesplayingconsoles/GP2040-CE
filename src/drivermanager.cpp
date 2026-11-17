@@ -5,6 +5,7 @@
 #include "drivers/egret/EgretDriver.h"
 #include "drivers/hid/HIDDriver.h"
 #include "drivers/keyboard/KeyboardDriver.h"
+#include "drivers/mouse/MouseDriver.h"
 #include "drivers/mdmini/MDMiniDriver.h"
 #include "drivers/neogeo/NeoGeoDriver.h"
 #include "drivers/pcengine/PCEngineDriver.h"
@@ -33,6 +34,9 @@ void DriverManager::setup(InputMode mode) {
             break;
         case INPUT_MODE_KEYBOARD:
             driver = new KeyboardDriver();
+            break;
+        case INPUT_MODE_MOUSE:
+            driver = new MouseDriver();
             break;
         case INPUT_MODE_GENERIC:
             driver = new HIDDriver();

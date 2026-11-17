@@ -55,6 +55,9 @@ const static uint32_t rebootDelayMs = 500;
 static absolute_time_t rebootDelayTimeout = nil_time;
 
 
+// CPC: the input mode this boot is running (ps3 or mouse), read by the UartInput addon.
+InputMode cpcRunningMode = InputMode::INPUT_MODE_PS3;
+
 void GP2040::setup() {
 	Storage::getInstance().init();
 
@@ -141,7 +144,20 @@ addons.LoadAddon(new UartInput());
 		return;
 	}
 
-	InputMode inputMode = InputMode::INPUT_MODE_PS3; // TODO: CPC hardcodes PS3 for the DC; restore bootAction.inputMode (config-driven) before any upstream PR
+	// CPC runs any USB device mode of the firmware, picked by the STORED input mode: the Pi sets it over the
+	// UART (see UartInput), which saves it (as CPC_MODE_BASE + the mode) and reboots. Nothing stored yet
+	// boots CPC_INPUT_MODE, the default of this build (-DCPC_INPUT_MODE in CMakeLists.txt, PS3 if unset).
+	// TODO: restore bootAction.inputMode (config-driven, every mode) before any upstream PR.
+#ifndef CPC_INPUT_MODE
+#define CPC_INPUT_MODE InputMode::INPUT_MODE_PS3
+#endif
+	InputMode inputMode = CPC_INPUT_MODE;
+	{
+		int stored = (int)bootAction.inputMode;
+		if (stored >= CPC_MODE_BASE && cpcModeAllowed((InputMode)(stored - CPC_MODE_BASE)))
+			inputMode = (InputMode)(stored - CPC_MODE_BASE);
+	}
+	cpcRunningMode = inputMode;
 	uint32_t profile = bootAction.profileNumber;
 
 	// Setup USB Driver

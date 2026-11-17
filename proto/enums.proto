@@ -157,6 +157,7 @@ enum InputMode
     INPUT_MODE_GENERIC = 14;
     INPUT_MODE_SWITCH_PRO = 15;
     INPUT_MODE_P5GENERAL = 16;
+    INPUT_MODE_MOUSE = 20;   // CPC. 17..19 are upstream's (SInput, Switch 2 Pro), kept free so a rebase can't collide
     INPUT_MODE_CONFIG = 255;
 }
 

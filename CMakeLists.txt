@@ -208,6 +208,7 @@ src/drivers/astro/AstroDriver.cpp
 src/drivers/egret/EgretDriver.cpp
 src/drivers/hid/HIDDriver.cpp
 src/drivers/keyboard/KeyboardDriver.cpp
+src/drivers/mouse/MouseDriver.cpp
 src/drivers/mdmini/MDMiniDriver.cpp
 src/drivers/neogeo/NeoGeoDriver.cpp
 src/drivers/net/NetDriver.cpp
@@ -369,6 +370,12 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
   GP2040_BOARDCONFIG="${GP2040_BOARDCONFIG}"
 )
 
+# CPC: the input mode is fixed per build (the Pi's iface=), e.g. -DCPC_INPUT_MODE=INPUT_MODE_MOUSE.
+# Without it gp2040.cpp builds PS3.
+if(DEFINED CPC_INPUT_MODE)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE CPC_INPUT_MODE=InputMode::${CPC_INPUT_MODE})
+endif()
+
 target_include_directories(${PROJECT_NAME}  PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/.. # for our common lwipopts or any other standard includes, if required
@@ -382,7 +389,7 @@ install(FILES
     DESTINATION .
 )
 
-if (NOT (DEFINED ENV(CI)) AND (EXISTS ${CMAKE_SOURCE_DIR}/modules/Custom.cmake))
+if (NOT (DEFINED ENV{CI}) AND (EXISTS ${CMAKE_SOURCE_DIR}/modules/Custom.cmake))
   message(STATUS "Found custom script.")
 	include(${CMAKE_SOURCE_DIR}/modules/Custom.cmake)
 endif()
